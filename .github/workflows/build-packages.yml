@@ -1,0 +1,191 @@
+name: Build DEB Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [created, published]
+  workflow_dispatch:
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Get version from tag
+        id: get_version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          elif [[ "${{ github.event.release.tag_name }}" != "" ]]; then
+            VERSION=${GITHUB_EVENT_RELEASE_TAG_NAME#v}
+          else
+            VERSION="1.0.0-dev"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+      
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debhelper dh-python python3-all python3-setuptools
+      
+      - name: Create package structure
+        run: |
+          mkdir -p debian/gpumode/usr/bin
+          mkdir -p debian/gpumode/lib/systemd/system
+          mkdir -p debian/gpumode/etc/udev/rules.d
+          mkdir -p debian/gpumode/usr/share/doc/gpumode
+          mkdir -p debian/gpumode/DEBIAN
+      
+      - name: Create copyright file
+        run: |
+          cat > debian/gpumode/usr/share/doc/gpumode/copyright << 'EOF'
+          Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+          Upstream-Name: gpumode
+          Source: https://github.com/FrameworkComputer/gpumode
+
+          Files: *
+          Copyright: 2025 Matt Hartley <mrh@frame.work>
+          License: GPL-3.0+
+
+          License: GPL-3.0+
+           This program is free software: you can redistribute it and/or modify
+           it under the terms of the GNU General Public License as published by
+           the Free Software Foundation, either version 3 of the License, or
+           (at your option) any later version.
+           .
+           This program is distributed in the hope that it will be useful,
+           but WITHOUT ANY WARRANTY; without even the implied warranty of
+           MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+           GNU General Public License for more details.
+           .
+           You should have received a copy of the GNU General Public License
+           along with this program.  If not, see <https://www.gnu.org/licenses/>.
+           .
+           On Debian systems, the complete text of the GNU General Public
+           License version 3 can be found in "/usr/share/common-licenses/GPL-3".
+          EOF
+      
+      - name: Copy files
+        run: |
+          cp GPUMode.py debian/gpumode/usr/bin/gpumode
+          chmod +x debian/gpumode/usr/bin/gpumode
+          cp power-profile-manager.py debian/gpumode/usr/bin/power-profile-manager
+          chmod +x debian/gpumode/usr/bin/power-profile-manager
+          cp power-profile-manager.service debian/gpumode/lib/systemd/system/
+          cp 99-power-profile-manager.rules debian/gpumode/etc/udev/rules.d/
+      
+      - name: Create control file
+        run: |
+          cat > debian/gpumode/DEBIAN/control << EOF
+          Package: gpumode
+          Version: ${{ steps.get_version.outputs.VERSION }}
+          Section: utils
+          Priority: optional
+          Architecture: all
+          Depends: python3, python3-gi, python3-dbus, gir1.2-gtk-3.0, gir1.2-appindicator3-0.1, gir1.2-notify-0.7, gir1.2-upowerglib-1.0, polkitd, udev
+          Maintainer: Matt Hartley <mrh@frame.work>
+          Description: Manual GPU switching and automatic power profile management
+           System tray application for manual GPU mode switching on NVIDIA Optimus
+           laptops, with automatic power profile adjustment. GPU switching
+           (integrated/NVIDIA/hybrid) requires user action and reboot. Power profiles
+           automatically switch between performance (AC) and power-saver (battery).
+           .
+           Ubuntu-only package. Not compatible with Fedora.
+          EOF
+      
+      - name: Create postinst script
+        run: |
+          cat > debian/gpumode/DEBIAN/postinst << 'EOF'
+          #!/bin/bash
+          set -e
+          
+          # Create autostart file for all users
+          for user_home in /home/*; do
+              if [ -d "$user_home" ]; then
+                  user=$(basename "$user_home")
+                  autostart_dir="$user_home/.config/autostart"
+                  autostart_file="$autostart_dir/gpumode.desktop"
+                  
+                  sudo -u "$user" mkdir -p "$autostart_dir" 2>/dev/null || mkdir -p "$autostart_dir"
+                  
+                  cat > "$autostart_file" << 'DESKTOPEOF'
+          [Desktop Entry]
+          Type=Application
+          Name=GPUMode
+          Comment=Manual GPU mode switching for laptops
+          Exec=/usr/bin/gpumode
+          Icon=video-display
+          Terminal=false
+          Categories=System;
+          X-GNOME-Autostart-enabled=true
+          DESKTOPEOF
+                  
+                  chown "$user":"$user" "$autostart_file" 2>/dev/null || true
+                  chmod 644 "$autostart_file"
+              fi
+          done
+          
+          # Reload udev rules
+          udevadm control --reload-rules
+          udevadm trigger --subsystem-match=power_supply
+          
+          # Enable and start power profile manager service
+          systemctl daemon-reload
+          systemctl enable power-profile-manager.service
+          systemctl start power-profile-manager.service
+          
+          exit 0
+          EOF
+          chmod +x debian/gpumode/DEBIAN/postinst
+      
+      - name: Create prerm script
+        run: |
+          cat > debian/gpumode/DEBIAN/prerm << 'EOF'
+          #!/bin/bash
+          set -e
+          
+          # Stop and disable power profile manager service
+          systemctl stop power-profile-manager.service 2>/dev/null || true
+          systemctl disable power-profile-manager.service 2>/dev/null || true
+          
+          pkill -f "python3.*gpumode" 2>/dev/null || true
+          
+          # Remove autostart files
+          for user_home in /home/*; do
+              if [ -d "$user_home" ]; then
+                  autostart_file="$user_home/.config/autostart/gpumode.desktop"
+                  rm -f "$autostart_file" 2>/dev/null || true
+              fi
+          done
+          
+          exit 0
+          EOF
+          chmod +x debian/gpumode/DEBIAN/prerm
+      
+      - name: Build DEB package
+        run: |
+          dpkg-deb --build debian/gpumode
+          mv debian/gpumode.deb gpumode_${{ steps.get_version.outputs.VERSION }}_all.deb
+      
+      - name: Verify package contents
+        run: |
+          dpkg-deb --contents gpumode_${{ steps.get_version.outputs.VERSION }}_all.deb
+          dpkg-deb --info gpumode_${{ steps.get_version.outputs.VERSION }}_all.deb
+      
+      - name: Upload DEB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpumode-deb
+          path: gpumode_${{ steps.get_version.outputs.VERSION }}_all.deb
+      
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: gpumode_${{ steps.get_version.outputs.VERSION }}_all.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
