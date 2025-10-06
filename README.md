@@ -37,7 +37,6 @@ System tray application for manual GPU mode switching on Ubuntu laptops with AMD
 - Best battery life
 - Cannot run GPU-intensive applications
 - **Power consumption:** ~6.7W at idle (3 min idle, powersave mode)
-- **Power savings:** ~7.7W less than Hybrid mode (53% reduction at idle)
 - **Switchable via this app**
 
 ### NVIDIA Mode (Discrete-only)
