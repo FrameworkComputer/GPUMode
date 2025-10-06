@@ -1,0 +1,13 @@
+[Unit]
+Description=Automatic Power Profile Manager
+After=network.target power-profiles-daemon.service tuned.service
+Wants=power-profiles-daemon.service tuned.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/power-profile-manager
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
