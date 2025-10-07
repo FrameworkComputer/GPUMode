@@ -17,7 +17,7 @@ System tray application for manual GPU mode switching on Ubuntu laptops with AMD
 
 - AMD integrated GPU + NVIDIA discrete GPU
 - NVIDIA proprietary drivers installed
-- Ubuntu Linux
+- Ubuntu Linux (25.10+)
 - [envycontrol](https://github.com/bayasdev/envycontrol) installed
 
 ---
